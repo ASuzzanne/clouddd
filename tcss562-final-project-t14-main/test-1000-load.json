@@ -1,0 +1,5 @@
+{
+  "bucket": "tcss562-suzzanne-data",
+  "key": "transformed/1000-cleaned.csv",
+  "database": "1000-sales.db"
+}

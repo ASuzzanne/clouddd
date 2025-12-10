@@ -1,0 +1,5 @@
+{
+  "bucket": "tcss562-suzzanne-data",
+  "key": "transformed/test-cleaned.csv",
+  "database": "test.db"
+}

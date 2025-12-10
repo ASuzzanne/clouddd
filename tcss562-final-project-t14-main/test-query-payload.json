@@ -1,0 +1,6 @@
+{
+  "bucket": "tcss562-suzzanne-data",
+  "dbKey": "databases/tlq.db",
+  "tableName": "sales_records",
+  "queryType": "count"
+}

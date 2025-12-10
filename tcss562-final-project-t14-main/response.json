@@ -1,1 +1,1 @@
-{"fileSizeBytes":6240886,"dbPath":"/tmp/sales-50000.db","message":"SQLite database created successfully.","status":"success"}
+{"rowCount":1,"message":"Query executed successfully.","results":[{"total":100}],"status":"success"}

@@ -1,0 +1,481 @@
+================================================================================
+        TRANSFORM-LOAD-QUERY (TLQ) SERVERLESS PIPELINE REPORT
+================================================================================
+
+PROJECT: TCSS562 Final Project - Team 14
+DATE: December 9, 2025
+AWS ACCOUNT: 110412263187
+REGION: us-west-2
+S3 BUCKET: tcss562-suzzanne-data
+
+================================================================================
+                            ARCHITECTURE OVERVIEW
+================================================================================
+
+The TLQ pipeline implements a three-stage serverless data processing system
+using AWS Lambda functions to transform, load, and query sales data.
+
+Pipeline Flow:
+--------------
+Raw CSV (S3) → TransformCSV → Cleaned CSV (S3) → CreateSQLiteDB → SQLite DB (S3) → QuerySQLite → JSON Results
+
+
+================================================================================
+                        LAMBDA FUNCTIONS DEPLOYED
+================================================================================
+
+┌────────────────────────────────────────────────────────────────────────────┐
+│ SERVICE 1: TRANSFORM (TransformCSV)                                        │
+├────────────────────────────────────────────────────────────────────────────┤
+│ Function Name: TransformCSV                                                │
+│ Handler: lambda.TransformCSV::handleRequest                                │
+│ Runtime: Java 11                                                           │
+│ Memory: 1024 MB                                                            │
+│ Timeout: 900 seconds (15 minutes)                                          │
+│ ARN: arn:aws:lambda:us-west-2:110412263187:function:TransformCSV          │
+│                                                                            │
+│ Operations:                                                                │
+│   • Downloads raw CSV from S3                                             │
+│   • Removes duplicate orders (by Order ID)                                │
+│   • Sorts records by Order Priority (Low → Medium → High → Critical)     │
+│   • Calculates "Order Processing Time" (Ship Date - Order Date in days)  │
+│   • Adds new column to CSV output                                         │
+│   • Uploads transformed CSV to S3                                         │
+│                                                                            │
+│ Input JSON Format:                                                         │
+│   {                                                                        │
+│     "bucket": "tcss562-suzzanne-data",                                    │
+│     "inputKey": "test.csv",                                               │
+│     "outputKey": "transformed/test-cleaned.csv"                           │
+│   }                                                                        │
+└────────────────────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────────────────────┐
+│ SERVICE 2: LOAD (CreateSQLiteDB)                                          │
+├────────────────────────────────────────────────────────────────────────────┤
+│ Function Name: CreateSQLiteDB                                              │
+│ Handler: lambda.CreateSQLiteDB::handleRequest                              │
+│ Runtime: Java 11                                                           │
+│ Memory: 3008 MB                                                            │
+│ Timeout: 900 seconds (15 minutes)                                          │
+│ ARN: arn:aws:lambda:us-west-2:110412263187:function:CreateSQLiteDB        │
+│                                                                            │
+│ Operations:                                                                │
+│   • Downloads transformed CSV from S3                                     │
+│   • Dynamically detects column structure from CSV header                  │
+│   • Sanitizes column names (replaces spaces with underscores)             │
+│   • Creates SQLite database in /tmp/ directory                            │
+│   • Creates table with appropriate schema                                 │
+│   • Performs batch inserts for optimal performance                        │
+│   • Uploads .db file to S3                                                │
+│                                                                            │
+│ Performance: 8,333 rows/second (tested with 50,000 records)               │
+│                                                                            │
+│ Input JSON Format:                                                         │
+│   {                                                                        │
+│     "bucket": "tcss562-suzzanne-data",                                    │
+│     "key": "transformed/test-cleaned.csv",                                │
+│     "database": "test.db"                                                 │
+│   }                                                                        │
+└────────────────────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────────────────────┐
+│ SERVICE 3: QUERY (QuerySQLite)                                            │
+├────────────────────────────────────────────────────────────────────────────┤
+│ Function Name: QuerySQLite                                                 │
+│ Handler: lambda.QuerySQLite::handleRequest                                 │
+│ Runtime: Java 11                                                           │
+│ Memory: 512 MB                                                             │
+│ Timeout: 300 seconds (5 minutes)                                           │
+│ ARN: arn:aws:lambda:us-west-2:110412263187:function:QuerySQLite           │
+│                                                                            │
+│ Operations:                                                                │
+│   • Checks /tmp cache for existing database (warm Lambda optimization)    │
+│   • Downloads database from S3 if cache miss (cold Lambda)                │
+│   • Opens connection in READ-ONLY mode                                    │
+│   • Executes SQL queries based on query type                              │
+│   • Returns results as JSON array                                         │
+│                                                                            │
+│ Supported Query Types:                                                     │
+│   • count      - Returns total row count                                  │
+│   • aggregate  - GROUP BY with SUM/AVG/MAX functions                      │
+│   • filter     - WHERE clause filtering                                   │
+│   • top        - ORDER BY with LIMIT                                      │
+│   • select     - Basic SELECT (default)                                   │
+│                                                                            │
+│ Input JSON Format (Aggregate Example):                                     │
+│   {                                                                        │
+│     "bucket": "tcss562-suzzanne-data",                                    │
+│     "dbKey": "databases/test.db",                                         │
+│     "tableName": "sales_data",                                            │
+│     "queryType": "aggregate",                                             │
+│     "queryParams": {                                                      │
+│       "groupBy": "Region",                                                │
+│       "function": "SUM",                                                  │
+│       "column": "Total_Revenue"                                           │
+│     }                                                                      │
+│   }                                                                        │
+└────────────────────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+                            IAM CONFIGURATION
+================================================================================
+
+Role Name: lambda-s3-sqlite-role
+Role ARN: arn:aws:iam::110412263187:role/lambda-s3-sqlite-role
+
+Attached Policies:
+  • AmazonS3FullAccess - Full read/write access to S3 buckets
+  • AWSLambdaBasicExecutionRole - CloudWatch Logs permissions
+
+Trust Policy: Lambda service can assume this role
+
+Permissions Allow:
+  ✓ S3 GetObject (download files)
+  ✓ S3 PutObject (upload files)
+  ✓ CloudWatch Logs creation and writing
+  ✓ Lambda execution
+
+
+================================================================================
+                          PROJECT STRUCTURE
+================================================================================
+
+tcss562-final-project-t14-main/
+├── src/main/java/lambda/
+│   ├── TransformCSV.java          ← Service 1: Transform
+│   ├── CreateSQLiteDB.java        ← Service 2: Load
+│   ├── QuerySQLite.java           ← Service 3: Query
+│   ├── LocalTest.java             ← Local testing harness
+│   ├── Request.java               ← Helper classes
+│   └── ...
+├── pom.xml                        ← Maven configuration
+├── deploy-transform.ps1           ← Deploy Service 1
+├── deploy.ps1                     ← Deploy Service 2
+├── deploy-query.ps1               ← Deploy Service 3
+├── deploy-all.ps1                 ← Deploy all services
+├── test.csv                       ← 100 records (12.7 KB)
+├── 1000-sales-records.csv         ← 1,000 records (125 KB)
+├── 5000-sales-records.csv         ← 5,000 records (608 KB)
+├── 10000-sales-records.csv        ← 10,000 records (1.2 MB)
+├── 50000-sales-records.csv        ← 50,000 records (6 MB)
+└── TEST_RESULTS.txt               ← Service 2 test report
+
+
+================================================================================
+                          MAVEN DEPENDENCIES
+================================================================================
+
+• aws-lambda-java-core (1.1.0) - Lambda runtime interface
+• gson (2.8.5) - JSON parsing
+• sqlite-jdbc (3.45.1.0) - SQLite database driver
+• aws-java-sdk-s3 (1.12.742) - S3 client library
+• maven-shade-plugin (2.3) - Creates uber-JAR with dependencies
+
+Build Output: lambda_test-1.0-SNAPSHOT.jar (21 MB)
+Build Command: mvn clean package
+
+
+================================================================================
+                          TEST DATA SCHEMA
+================================================================================
+
+CSV Columns (14 total):
+  1. Region                    - Geographic region
+  2. Country                   - Country name
+  3. Item Type                 - Product category
+  4. Sales Channel             - Online or Offline
+  5. Order Priority            - L (Low), M (Medium), H (High), C (Critical)
+  6. Order Date                - MM/DD/YYYY format
+  7. Order ID                  - Unique order identifier
+  8. Ship Date                 - MM/DD/YYYY format
+  9. Units Sold                - Quantity
+  10. Unit Price               - Price per unit
+  11. Unit Cost                - Cost per unit
+  12. Total Revenue            - Revenue amount
+  13. Total Cost               - Cost amount
+  14. Total Profit             - Profit amount
+
+After Transformation (15 columns):
+  + Order Processing Time (days) - Calculated: Ship Date - Order Date
+
+
+================================================================================
+                          TESTING COMMANDS
+================================================================================
+
+TEST 1: Transform CSV
+---------------------
+aws lambda invoke --function-name TransformCSV --payload '{
+  "bucket":"tcss562-suzzanne-data",
+  "inputKey":"test.csv",
+  "outputKey":"transformed/test-cleaned.csv"
+}' response.json
+
+Expected Output:
+  • status: "success"
+  • duplicatesRemoved: (count)
+  • rowsSorted: (count)
+  • message: "CSV transformed and uploaded successfully"
+
+
+TEST 2: Load into SQLite
+-------------------------
+aws lambda invoke --function-name CreateSQLiteDB --payload '{
+  "bucket":"tcss562-suzzanne-data",
+  "key":"transformed/test-cleaned.csv",
+  "database":"test.db"
+}' response.json
+
+Expected Output:
+  • status: "success"
+  • rowsInserted: (count)
+  • dbSizeBytes: (size)
+  • message: "Database created and uploaded successfully"
+
+
+TEST 3: Query - Count All Rows
+-------------------------------
+aws lambda invoke --function-name QuerySQLite --payload '{
+  "bucket":"tcss562-suzzanne-data",
+  "dbKey":"databases/test.db",
+  "tableName":"sales_data",
+  "queryType":"count"
+}' response.json
+
+Expected Output:
+  • status: "success"
+  • rowCount: (total rows)
+  • results: [{"total": X}]
+
+
+TEST 4: Query - Aggregate by Region
+------------------------------------
+aws lambda invoke --function-name QuerySQLite --payload '{
+  "bucket":"tcss562-suzzanne-data",
+  "dbKey":"databases/test.db",
+  "tableName":"sales_data",
+  "queryType":"aggregate",
+  "queryParams":{
+    "groupBy":"Region",
+    "function":"SUM",
+    "column":"Total_Revenue"
+  }
+}' response.json
+
+Expected Output:
+  • status: "success"
+  • results: [{"Region":"...", "aggregate_value":...}, ...]
+
+
+TEST 5: Query - Filter High Priority Orders
+--------------------------------------------
+aws lambda invoke --function-name QuerySQLite --payload '{
+  "bucket":"tcss562-suzzanne-data",
+  "dbKey":"databases/test.db",
+  "tableName":"sales_data",
+  "queryType":"filter",
+  "queryParams":{
+    "column":"Order_Priority",
+    "value":"H"
+  }
+}' response.json
+
+Expected Output:
+  • status: "success"
+  • results: [array of high-priority orders, max 100]
+
+
+TEST 6: Query - Top 10 by Revenue
+----------------------------------
+aws lambda invoke --function-name QuerySQLite --payload '{
+  "bucket":"tcss562-suzzanne-data",
+  "dbKey":"databases/test.db",
+  "tableName":"sales_data",
+  "queryType":"top",
+  "queryParams":{
+    "limit":10,
+    "orderBy":"Total_Revenue"
+  }
+}' response.json
+
+Expected Output:
+  • status: "success"
+  • results: [top 10 orders by revenue]
+
+
+================================================================================
+                      FULL PIPELINE TEST SCRIPT
+================================================================================
+
+# Complete end-to-end test with 1000 records
+
+# Step 1: Transform
+Write-Host "Step 1: Transforming CSV..." -ForegroundColor Cyan
+aws lambda invoke --function-name TransformCSV --payload '{
+  "bucket":"tcss562-suzzanne-data",
+  "inputKey":"1000-sales-records.csv",
+  "outputKey":"transformed/1000-cleaned.csv"
+}' response.json
+Get-Content response.json | ConvertFrom-Json | ConvertTo-Json -Depth 10
+
+# Step 2: Load
+Write-Host "`nStep 2: Loading into SQLite..." -ForegroundColor Cyan
+aws lambda invoke --function-name CreateSQLiteDB --payload '{
+  "bucket":"tcss562-suzzanne-data",
+  "key":"transformed/1000-cleaned.csv",
+  "database":"1000-sales.db"
+}' response.json
+Get-Content response.json | ConvertFrom-Json | ConvertTo-Json -Depth 10
+
+# Step 3: Query
+Write-Host "`nStep 3: Querying database..." -ForegroundColor Cyan
+aws lambda invoke --function-name QuerySQLite --payload '{
+  "bucket":"tcss562-suzzanne-data",
+  "dbKey":"databases/1000-sales.db",
+  "tableName":"sales_data",
+  "queryType":"top",
+  "queryParams":{"limit":10,"orderBy":"Total_Revenue"}
+}' response.json
+Get-Content response.json | ConvertFrom-Json | ConvertTo-Json -Depth 10
+
+
+================================================================================
+                          KEY FEATURES
+================================================================================
+
+✓ Serverless Architecture - No server management required
+✓ Auto-scaling - Handles variable workloads automatically
+✓ Pay-per-use - Only charged for actual execution time
+✓ Dynamic Schema Detection - Automatically adapts to CSV structure
+✓ Batch Processing - Efficient bulk inserts for performance
+✓ Warm Lambda Optimization - /tmp caching reduces cold starts
+✓ Read-only Query Mode - Prevents accidental data modification
+✓ Error Handling - Comprehensive try-catch with detailed logging
+✓ CloudWatch Integration - Full execution logging for debugging
+
+
+================================================================================
+                      PERFORMANCE BENCHMARKS
+================================================================================
+
+Service 2 (Load) Performance:
+┌──────────────┬────────────┬──────────────┬─────────────────┐
+│ Dataset      │ Records    │ File Size    │ Processing Time │
+├──────────────┼────────────┼──────────────┼─────────────────┤
+│ test.csv     │ 100        │ 12.7 KB      │ ~2 seconds      │
+│ 1K records   │ 1,000      │ 125 KB       │ ~3 seconds      │
+│ 5K records   │ 5,000      │ 608 KB       │ ~5 seconds      │
+│ 10K records  │ 10,000     │ 1.2 MB       │ ~7 seconds      │
+│ 50K records  │ 50,000     │ 6 MB         │ ~8 seconds      │
+└──────────────┴────────────┴──────────────┴─────────────────┘
+
+Success Rate: 100% (5/5 tests passed)
+Average Throughput: 8,333 rows/second
+
+
+================================================================================
+                          DEPLOYMENT STATUS
+================================================================================
+
+✅ TransformCSV - DEPLOYED
+   Status: Active
+   Last Modified: 2025-12-10T06:40:09.698+0000
+   Code SHA256: KEggU+ZZijIsEWqoZYaebPF/EVpzWrZczNGlCrFf6z8=
+
+✅ CreateSQLiteDB - DEPLOYED
+   Status: Active
+   Previously tested with 5 datasets (100 - 50,000 records)
+
+✅ QuerySQLite - DEPLOYED
+   Status: Active
+   Last Modified: 2025-12-10T06:47:34.484+0000
+   Code SHA256: KEggU+ZZijIsEWqoZYaebPF/EVpzWrZczNGlCrFf6z8=
+
+
+================================================================================
+                          GIT REPOSITORY
+================================================================================
+
+Repository: https://github.com/SJh29/tcss562-final-project-t14
+Branch: test
+Owner: SJh29
+
+Files Staged:
+  • src/main/java/lambda/*.java (all Lambda functions)
+  • pom.xml (Maven configuration)
+  • Test CSV files (100 - 50,000 records)
+  • TEST_RESULTS.txt
+  • .gitignore (excludes deployment scripts and build artifacts)
+
+Excluded from Git:
+  • target/ (build output)
+  • deploy*.ps1 (deployment scripts with credentials)
+  • .vscode/ (IDE configuration)
+
+
+================================================================================
+                          NEXT STEPS
+================================================================================
+
+1. Test Complete Pipeline
+   Run the full pipeline test script with different dataset sizes
+
+2. Configure S3 Event Triggers (Optional)
+   Set up automatic triggering when CSV files are uploaded:
+   • Transform triggers on raw CSV upload
+   • Load triggers on transformed CSV creation
+   • Query can be invoked manually or via API Gateway
+
+3. Add API Gateway (Optional)
+   Create REST API endpoints for Query function to enable web access
+
+4. Monitor CloudWatch Logs
+   Review execution logs for performance tuning:
+   • /aws/lambda/TransformCSV
+   • /aws/lambda/CreateSQLiteDB
+   • /aws/lambda/QuerySQLite
+
+5. Commit and Push to GitHub
+   git commit -m "Implement complete TLQ pipeline"
+   git push origin test
+
+
+================================================================================
+                          TROUBLESHOOTING
+================================================================================
+
+Issue: "Access Denied" errors
+Solution: Verify IAM role has AmazonS3FullAccess policy attached
+
+Issue: Lambda timeout
+Solution: Increase timeout in deployment script for large datasets
+
+Issue: Out of memory
+Solution: Increase memory allocation (also increases CPU)
+
+Issue: Database not found in Query
+Solution: Verify database was successfully uploaded by Load function
+          Check CloudWatch logs for S3 upload confirmation
+
+Issue: Column name errors
+Solution: TransformCSV and CreateSQLiteDB handle spaces in column names
+          Query uses underscored column names (e.g., Order_Date not "Order Date")
+
+
+================================================================================
+                          CONTACT & SUPPORT
+================================================================================
+
+Project: TCSS562 Final Project - Team 14
+AWS Account: 110412263187
+Region: us-west-2
+
+For issues, check CloudWatch Logs in AWS Console:
+Lambda → Functions → [Function Name] → Monitor → View logs in CloudWatch
+
+
+================================================================================
+                          END OF REPORT
+================================================================================

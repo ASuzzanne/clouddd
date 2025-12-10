@@ -1,0 +1,6 @@
+{
+  "sourceBucket": "tcss562-suzzanne-data",
+  "sourceKey": "test.csv",
+  "destBucket": "tcss562-suzzanne-data",
+  "destKey": "transformed/test-cleaned.csv"
+}

@@ -29,10 +29,15 @@ public class CreateSQLiteDB implements RequestHandler<HashMap<String, Object>, H
             context.getLogger().log("Downloaded file size: " + fileSize + " bytes\n");
             
             File sqliteDB = createSQLiteDB(downloaded, dbName, tableName, context);
+            
+            // Upload SQLite database back to S3
+            String dbS3Key = "databases/" + dbName;
+            uploadToS3(bucket, dbS3Key, sqliteDB, context);
 
             response.put("status", "success");
             response.put("dbPath", sqliteDB.getAbsolutePath());
-            response.put("message", "SQLite database created successfully.");
+            response.put("dbS3Location", "s3://" + bucket + "/" + dbS3Key);
+            response.put("message", "SQLite database created and uploaded to S3 successfully.");
             response.put("fileSizeBytes", fileSize);
 
         } catch (Exception e) {
@@ -159,5 +164,14 @@ public class CreateSQLiteDB implements RequestHandler<HashMap<String, Object>, H
 
         context.getLogger().log("Database creation completed successfully\n");
         return dbFile;
+    }
+
+    /** Upload file to S3 */
+    private void uploadToS3(String bucket, String key, File file, Context context) throws IOException {
+        AmazonS3 s3 = AmazonS3ClientBuilder.defaultClient();
+        
+        context.getLogger().log("Uploading database to S3: " + bucket + "/" + key + "\n");
+        s3.putObject(bucket, key, file);
+        context.getLogger().log("Successfully uploaded database to S3\n");
     }
 }
