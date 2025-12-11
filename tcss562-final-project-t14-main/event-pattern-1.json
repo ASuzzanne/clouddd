@@ -1,0 +1,15 @@
+{
+  "source": ["aws.s3"],
+  "detail-type": ["Object Created"],
+  "detail": {
+    "bucket": {
+      "name": ["tcss562-suzzanne-data"]
+    },
+    "object": {
+      "key": [{
+        "suffix": ".csv",
+        "anything-but": ".transformed.csv"
+      }]
+    }
+  }
+}
